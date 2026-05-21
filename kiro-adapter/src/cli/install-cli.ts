@@ -341,7 +341,7 @@ async function createPAIAgent(adapter: KiroCLIAdapter): Promise<void> {
   await adapter.createCustomAgent({
     name: 'pai',
     description: 'Personal AI Infrastructure agent with full PAI capabilities',
-    system_prompt: `You are a Personal AI Infrastructure (PAI) agent. You help users achieve their ideal state by:
+    prompt: `You are a Personal AI Infrastructure (PAI) agent. You help users achieve their ideal state by:
 
 1. Understanding their TELOS (goals, mission, beliefs)
 2. Using the Algorithm v6.3.0 (OBSERVE → THINK → PLAN → BUILD → EXECUTE → VERIFY → LEARN)
@@ -350,9 +350,6 @@ async function createPAIAgent(adapter: KiroCLIAdapter): Promise<void> {
 5. Continuously learning and improving
 
 Always prioritize the user's ideal state and long-term goals over short-term convenience.`,
-    resources: [
-      'file://.kiro/steering/**/*.md',
-    ],
     tools: ['*'], // All tools
   });
 

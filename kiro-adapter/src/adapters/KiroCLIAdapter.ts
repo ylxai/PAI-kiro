@@ -22,10 +22,12 @@ import {
 export interface KiroCLIAgentConfig {
   name: string;
   description?: string;
-  system_prompt?: string;
-  resources?: string[];
+  prompt?: string;              // Agent's system prompt
+  mcpServers?: Record<string, any>;
   tools?: string[];
-  hooks?: KiroCLIHook[];
+  allowedTools?: string[];
+  includeMcpJson?: boolean;
+  hooks?: Record<string, KiroCLIHook[]>;  // Hooks grouped by event type
   model?: string;
 }
 
@@ -45,15 +47,16 @@ export class KiroCLIAdapter extends BasePlatformAdapter {
     super();
     this.config = {
       name: 'kiro-cli',
-      version: '0.2.0',
+      version: '0.3.0',
       configDir: path.join(os.homedir(), '.kiro', 'pai'),
-      steeringDir: path.join(os.homedir(), '.kiro', 'steering'),
+      steeringDir: undefined, // Kiro CLI doesn't use steering, uses agent prompt instead
       skillsDir: path.join(os.homedir(), '.kiro', 'skills'),
-      hooksDir: path.join(process.cwd(), '.kiro', 'agents'), // CLI uses agents dir
+      hooksDir: path.join(os.homedir(), '.kiro', 'hooks'), // Global hooks directory
       memoryDir: path.join(os.homedir(), '.kiro', 'pai', 'MEMORY'),
     };
     
-    this.agentConfigPath = path.join(process.cwd(), '.kiro', 'agents', 'pai-agent.json');
+    // Agent configs are in ~/.kiro/agents/ (global, not workspace)
+    this.agentConfigPath = path.join(os.homedir(), '.kiro', 'agents', 'pai.json');
   }
 
   async initialize(): Promise<void> {
@@ -74,9 +77,9 @@ export class KiroCLIAdapter extends BasePlatformAdapter {
   private async ensureDirectories(): Promise<void> {
     const dirs = [
       this.config.configDir,
-      this.config.steeringDir!,
       this.config.skillsDir,
-      path.join(process.cwd(), '.kiro', 'agents'),
+      this.config.hooksDir,
+      path.join(os.homedir(), '.kiro', 'agents'),
       this.config.memoryDir,
     ];
 
@@ -90,7 +93,9 @@ export class KiroCLIAdapter extends BasePlatformAdapter {
   }
 
   getSteeringDir(): string {
-    return this.config.steeringDir!;
+    // Kiro CLI doesn't use steering directory
+    // Context is injected via agent prompt field
+    return '';
   }
 
   getSkillsDir(): string {
@@ -98,7 +103,7 @@ export class KiroCLIAdapter extends BasePlatformAdapter {
   }
 
   getHooksDir(): string {
-    return path.join(process.cwd(), '.kiro', 'agents');
+    return this.config.hooksDir;
   }
 
   getMemoryDir(): string {
@@ -115,17 +120,23 @@ export class KiroCLIAdapter extends BasePlatformAdapter {
     // Convert PAI hook to Kiro CLI hook format
     const kiroHook = this.convertToKiroCLIHook(event);
     
-    // Add hook to agent config
+    // Initialize hooks object if needed
     if (!agentConfig.hooks) {
-      agentConfig.hooks = [];
+      agentConfig.hooks = {};
     }
     
-    // Remove existing hook with same name
-    agentConfig.hooks = agentConfig.hooks.filter(h => 
-      !h.command.includes(event.name)
+    // Initialize array for this event type if needed
+    if (!agentConfig.hooks[kiroHook.event]) {
+      agentConfig.hooks[kiroHook.event] = [];
+    }
+    
+    // Remove existing hook with same command
+    agentConfig.hooks[kiroHook.event] = agentConfig.hooks[kiroHook.event].filter(
+      (h: KiroCLIHook) => h.command !== kiroHook.command
     );
     
-    agentConfig.hooks.push(kiroHook);
+    // Add new hook
+    agentConfig.hooks[kiroHook.event].push(kiroHook);
     
     // Save agent config
     await this.saveAgentConfig(agentConfig);
@@ -148,13 +159,12 @@ export class KiroCLIAdapter extends BasePlatformAdapter {
 
     const kiroEventType = hookTypeMapping[event.type] || 'agentSpawn';
 
-    // Create hook script path
+    // Hook scripts are in global ~/.kiro/hooks/ directory
     const hookScriptPath = path.join(
-      process.cwd(), 
-      '.kiro', 
-      'agents', 
+      os.homedir(),
+      '.kiro',
       'hooks',
-      `${event.name}.sh`
+      `pai-${event.name}.sh`
     );
 
     const hook: KiroCLIHook = {
@@ -175,9 +185,12 @@ export class KiroCLIAdapter extends BasePlatformAdapter {
     let agentConfig = await this.loadAgentConfig();
     
     if (agentConfig.hooks) {
-      agentConfig.hooks = agentConfig.hooks.filter(h => 
-        !h.command.includes(hookName)
-      );
+      // Remove hook from all event types
+      for (const eventType in agentConfig.hooks) {
+        agentConfig.hooks[eventType] = agentConfig.hooks[eventType].filter(
+          (h: KiroCLIHook) => !h.command.includes(hookName)
+        );
+      }
       await this.saveAgentConfig(agentConfig);
     }
     
@@ -189,8 +202,10 @@ export class KiroCLIAdapter extends BasePlatformAdapter {
     const hooks: HookEvent[] = [];
 
     if (agentConfig.hooks) {
-      for (const kiroHook of agentConfig.hooks) {
-        hooks.push(this.convertFromKiroCLIHook(kiroHook));
+      for (const eventType in agentConfig.hooks) {
+        for (const kiroHook of agentConfig.hooks[eventType]) {
+          hooks.push(this.convertFromKiroCLIHook(kiroHook));
+        }
       }
     }
 
@@ -223,24 +238,25 @@ export class KiroCLIAdapter extends BasePlatformAdapter {
   }
 
   /**
-   * Inject context as Kiro CLI steering file
+   * Inject context into PAI agent prompt
+   * Kiro CLI doesn't use steering files - context goes into agent's prompt field
    */
   async injectContext(injection: ContextInjection): Promise<void> {
-    const steeringDir = injection.type === 'global' 
-      ? this.config.steeringDir!
-      : path.join(process.cwd(), '.kiro', 'steering');
-
-    await fs.mkdir(steeringDir, { recursive: true });
-
-    // Generate filename
-    const filename = `pai-${injection.type}-${Date.now()}.md`;
-    const filePath = path.join(steeringDir, filename);
-
-    // Kiro CLI steering files don't need frontmatter - they're always loaded
-    const content = injection.content;
-
-    await fs.writeFile(filePath, content);
-    console.log(`✅ Injected ${injection.type} context: ${filename}`);
+    // Load current agent config
+    const agentConfig = await this.loadAgentConfig();
+    
+    // Append context to agent prompt
+    if (!agentConfig.prompt) {
+      agentConfig.prompt = '';
+    }
+    
+    // Add context with clear separator
+    agentConfig.prompt += `\n\n# ${injection.type.toUpperCase()} CONTEXT\n\n${injection.content}`;
+    
+    // Save updated agent config
+    await this.saveAgentConfig(agentConfig);
+    
+    console.log(`✅ Injected ${injection.type} context into PAI agent prompt`);
   }
 
   async executeTool(tool: string, params: any): Promise<any> {
@@ -312,12 +328,10 @@ export class KiroCLIAdapter extends BasePlatformAdapter {
       return {
         name: 'pai',
         description: 'Personal AI Infrastructure agent for Kiro CLI',
-        system_prompt: 'You are a helpful AI assistant powered by PAI (Personal AI Infrastructure).',
-        resources: [
-          'file://.kiro/steering/**/*.md',
-        ],
+        prompt: 'You are a helpful AI assistant powered by PAI (Personal AI Infrastructure).',
         tools: ['*'], // All tools by default
-        hooks: [],
+        hooks: {},
+        includeMcpJson: true,
       };
     }
   }
@@ -340,7 +354,7 @@ export class KiroCLIAdapter extends BasePlatformAdapter {
   async createCustomAgent(config: Partial<KiroCLIAgentConfig>): Promise<string> {
     const agentName = config.name || 'pai-custom';
     const agentPath = path.join(
-      process.cwd(),
+      os.homedir(),
       '.kiro',
       'agents',
       `${agentName}.json`
@@ -349,11 +363,11 @@ export class KiroCLIAdapter extends BasePlatformAdapter {
     const fullConfig: KiroCLIAgentConfig = {
       name: agentName,
       description: config.description || 'Custom PAI agent',
-      system_prompt: config.system_prompt,
-      resources: config.resources || ['file://.kiro/steering/**/*.md'],
+      prompt: config.prompt,
       tools: config.tools || ['*'],
-      hooks: config.hooks || [],
+      hooks: config.hooks || {},
       model: config.model,
+      includeMcpJson: config.includeMcpJson !== false,
     };
 
     await fs.writeFile(agentPath, JSON.stringify(fullConfig, null, 2));
