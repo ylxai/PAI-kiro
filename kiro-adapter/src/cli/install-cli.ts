@@ -31,7 +31,6 @@ interface InstallConfig {
   backupExisting: boolean;
   migrateSkills: boolean;
   migrateTelos: boolean;
-  setupHooks: boolean;
   createCustomAgent: boolean;
   paiSourcePath?: string;
 }
@@ -60,12 +59,17 @@ async function main() {
   const adapter = new KiroCLIAdapter();
   await adapter.initialize();
 
-  // Step 5: Initialize PAI Core
+  // Step 5: Create PAI agent config FIRST so PAICore can inject into it
+  if (config.createCustomAgent) {
+    await createPAIAgent(adapter);
+  }
+
+  // Step 6: Initialize PAI Core (injects Algorithm context, registers hooks)
   console.log(chalk.yellow('\n🚀 Initializing PAI Core...\n'));
   const pai = new PAICore({ adapter });
   await pai.initialize();
 
-  // Step 6: Migrate from existing PAI (if requested)
+  // Step 7: Migrate from existing PAI (if requested)
   if (config.migrateSkills && config.paiSourcePath) {
     await migrateSkills(config.paiSourcePath, adapter);
   }
@@ -74,17 +78,7 @@ async function main() {
     await migrateTelos(config.paiSourcePath, adapter);
   }
 
-  // Step 7: Setup core hooks
-  if (config.setupHooks) {
-    await setupCoreHooks(adapter);
-  }
-
-  // Step 8: Create custom PAI agent
-  if (config.createCustomAgent) {
-    await createPAIAgent(adapter);
-  }
-
-  // Step 9: Create welcome message
+  // Step 8: Create welcome message
   await createWelcomeMessage(adapter);
 
   console.log(chalk.green.bold('\n✅ Installation complete!\n'));
@@ -147,7 +141,6 @@ function getDefaultConfig(): InstallConfig {
     backupExisting: true,
     migrateSkills: false,
     migrateTelos: false,
-    setupHooks: true,
     createCustomAgent: true,
   };
 }
@@ -194,12 +187,6 @@ async function promptInstallConfig(): Promise<InstallConfig> {
       message: 'Migrate TELOS (goals, mission, beliefs)?',
       default: true,
       when: (answers) => answers.migrateFromPAI,
-    },
-    {
-      type: 'confirm',
-      name: 'setupHooks',
-      message: 'Setup core PAI hooks?',
-      default: true,
     },
     {
       type: 'confirm',
@@ -303,38 +290,6 @@ async function createTelosSteering(telosDir: string, adapter: KiroCLIAdapter): P
   }
 }
 
-async function setupCoreHooks(adapter: KiroCLIAdapter): Promise<void> {
-  console.log(chalk.yellow('\n🪝 Setting up core hooks...\n'));
-
-  const hooks = [
-    {
-      type: 'SessionStart' as const,
-      name: 'PAI-Init',
-      description: 'Initialize PAI context on agent spawn',
-      handler: async () => {},
-    },
-    {
-      type: 'UserPromptSubmit' as const,
-      name: 'PAI-PromptProcessing',
-      description: 'Process user prompts with PAI context',
-      handler: async () => {},
-    },
-    {
-      type: 'PostToolUse' as const,
-      name: 'PAI-ToolActivityTracker',
-      description: 'Track tool usage for observability',
-      handler: async () => {},
-    },
-  ];
-
-  for (const hook of hooks) {
-    await adapter.registerHook(hook);
-    console.log(chalk.green(`  ✅ ${hook.name}`));
-  }
-
-  console.log('');
-}
-
 async function createPAIAgent(adapter: KiroCLIAdapter): Promise<void> {
   console.log(chalk.yellow('\n🤖 Creating PAI custom agent...\n'));
 
@@ -374,8 +329,7 @@ PAI (Personal AI Infrastructure) is now running on your Kiro CLI.
 
 ### 1. Start PAI Agent
 \`\`\`bash
-cd your-project
-kiro-cli --agent pai
+kiro-cli chat --agent pai
 \`\`\`
 
 ### 2. Define Your TELOS
@@ -387,15 +341,16 @@ PAI has 45+ skills available. Just describe what you need and PAI will use the r
 ## Key Differences from Kiro IDE
 
 - ❌ **No Specs** - Kiro CLI doesn't have specs system
+- ❌ **No Steering Directory** - Context is injected via agent prompt field
 - ✅ **Custom Agents** - Create specialized agents for different workflows
 - ✅ **Terminal-based** - All interaction through CLI
 - ✅ **Hooks in Agent Config** - Hooks are defined in agent JSON files
 
 ## Configuration Files
 
-- **Agent Config**: \`.kiro/agents/pai-agent.json\`
-- **Steering**: \`~/.kiro/steering/\` (global) or \`.kiro/steering/\` (workspace)
+- **Agent Config**: \`~/.kiro/agents/pai.json\`
 - **Skills**: \`~/.kiro/skills/\` (global)
+- **Hooks**: \`~/.kiro/hooks/\` (global)
 - **Memory**: \`~/.kiro/pai/MEMORY/\`
 
 ## Documentation
@@ -421,8 +376,7 @@ PAI has 45+ skills available. Just describe what you need and PAI will use the r
 function printNextSteps(): void {
   console.log(chalk.cyan('📚 Next Steps:\n'));
   console.log(chalk.white('1. Start Kiro CLI with PAI agent:'));
-  console.log(chalk.gray('   cd your-project'));
-  console.log(chalk.gray('   kiro-cli --agent pai\n'));
+  console.log(chalk.gray('   kiro-cli chat --agent pai\n'));
   console.log(chalk.white('2. Define your TELOS (goals, mission, beliefs)\n'));
   console.log(chalk.white('3. Start using PAI skills and capabilities!\n'));
   

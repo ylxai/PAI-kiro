@@ -217,6 +217,17 @@ export class PAICore {
     // Only register hooks that the platform supports
     const hooks: HookEvent[] = [];
 
+    if (capabilities.hookTypes.includes('SessionStart')) {
+      hooks.push({
+        type: 'SessionStart',
+        name: 'PAI-Init',
+        description: 'Initialize PAI context on agent spawn',
+        handler: async (context) => {
+          console.log('🚀 Initializing PAI context...');
+        },
+      });
+    }
+
     if (capabilities.hookTypes.includes('UserPromptSubmit')) {
       hooks.push({
         type: 'UserPromptSubmit',
