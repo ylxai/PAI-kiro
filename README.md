@@ -64,6 +64,34 @@ Setelah instalasi berhasil, Anda dapat langsung mulai berinteraksi dengan agen P
 kiro-cli chat --agent pai
 ```
 
+### 🎯 Memulai Setup & Wawancara (TELOS)
+
+Kiro CLI membatasi penamaan slash command internal secara tetap (*fixed*). Untuk mengatasinya, PAI-Kiro secara otomatis mendaftarkan **Global Prompts** yang bertindak sebagai pintasan. 
+
+Di dalam sesi chat Kiro CLI, ketik perintah berikut untuk memicu alur kerja:
+* **`@interview`** — Memulai dialog wawancara Socratic 4 fase (TELOS, IDEAL_STATE, Preferensi, Identitas) untuk mengonfigurasi profil personal Anda secara otomatis.
+* **`@telos`** — Memulai peninjauan langsung atas seluruh berkas target TELOS Anda.
+
+*(Tip: Gunakan tombol `Tab` pada terminal Anda untuk melengkapi pintasan `@interview` dan `@telos` secara otomatis!)*
+
+Anda juga dapat menggunakan frasa percakapan biasa seperti `"start the interview"` atau `"review telos"`.
+
+### 🔊 Mengaktifkan PULSE Daemon (Port 31337)
+
+PULSE daemon adalah layanan background yang memberikan notifikasi suara selama alur wawancara berlangsung. Layanan ini otomatis aktif di port `31337` setelah instalasi.
+
+Anda dapat mengontrol status layanan PULSE secara manual menggunakan skrip manajemen:
+```bash
+# Memulai layanan
+~/.kiro/pai/PULSE/manage.sh start
+
+# Memeriksa status
+~/.kiro/pai/PULSE/manage.sh status
+
+# Menghentikan layanan
+~/.kiro/pai/PULSE/manage.sh stop
+```
+
 ### Konfigurasi Penting
 
 * **Agent Config**: `~/.kiro/agents/pai.json`
