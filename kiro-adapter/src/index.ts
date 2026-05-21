@@ -3,8 +3,7 @@
  */
 
 export { PlatformAdapter, BasePlatformAdapter } from './adapters/PlatformAdapter';
-export { KiroAdapter } from './adapters/KiroAdapter'; // For Kiro IDE (legacy)
-export { KiroCLIAdapter } from './adapters/KiroCLIAdapter'; // For Kiro CLI
+export { KiroAdapter } from './adapters/KiroAdapter';
 export { PAICore } from './core/PAICore';
 
 export type {
@@ -19,6 +18,6 @@ export type {
 } from './adapters/PlatformAdapter';
 
 export type {
-  KiroCLIAgentConfig,
-  KiroCLIHook,
-} from './adapters/KiroCLIAdapter';
+  KiroAgentConfig,
+  KiroHook,
+} from './adapters/KiroAdapter';

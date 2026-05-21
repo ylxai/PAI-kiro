@@ -25,6 +25,8 @@ export interface TelosData {
   books?: string[];
   mentalModels?: string[];
   narratives?: string[];
+  problems?: string[];
+  strategies?: string[];
 }
 
 export class PAICore {
@@ -125,8 +127,21 @@ export class PAICore {
             telos.goals = this.parseListFromMarkdown(content);
           } else if (key === 'beliefs') {
             telos.beliefs = this.parseListFromMarkdown(content);
+          } else if (key === 'wisdom') {
+            telos.wisdom = this.parseListFromMarkdown(content);
+          } else if (key === 'challenges') {
+            telos.challenges = this.parseListFromMarkdown(content);
+          } else if (key === 'books') {
+            telos.books = this.parseListFromMarkdown(content);
+          } else if (key === 'models') {
+            telos.mentalModels = this.parseListFromMarkdown(content);
+          } else if (key === 'narratives') {
+            telos.narratives = this.parseListFromMarkdown(content);
+          } else if (key === 'problems') {
+            telos.problems = this.parseListFromMarkdown(content);
+          } else if (key === 'strategies') {
+            telos.strategies = this.parseListFromMarkdown(content);
           }
-          // Add more as needed
         }
       }
     } catch (error) {
@@ -157,21 +172,27 @@ export class PAICore {
       context += `## Mission\n\n${telos.mission}\n\n`;
     }
 
-    if (telos.goals && telos.goals.length > 0) {
-      context += `## Goals\n\n`;
-      for (const goal of telos.goals) {
-        context += `- ${goal}\n`;
+    const renderList = (title: string, list?: string[]) => {
+      if (list && list.length > 0) {
+        let section = `## ${title}\n\n`;
+        for (const item of list) {
+          section += `- ${item}\n`;
+        }
+        section += '\n';
+        return section;
       }
-      context += '\n';
-    }
+      return '';
+    };
 
-    if (telos.beliefs && telos.beliefs.length > 0) {
-      context += `## Beliefs\n\n`;
-      for (const belief of telos.beliefs) {
-        context += `- ${belief}\n`;
-      }
-      context += '\n';
-    }
+    context += renderList('Goals', telos.goals);
+    context += renderList('Beliefs', telos.beliefs);
+    context += renderList('Problems', telos.problems);
+    context += renderList('Strategies', telos.strategies);
+    context += renderList('Challenges', telos.challenges);
+    context += renderList('Wisdom', telos.wisdom);
+    context += renderList('Mental Models', telos.mentalModels);
+    context += renderList('Narratives', telos.narratives);
+    context += renderList('Favorite Books', telos.books);
 
     return context;
   }

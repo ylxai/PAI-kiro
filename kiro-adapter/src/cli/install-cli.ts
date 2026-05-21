@@ -12,7 +12,7 @@ import chalk from 'chalk';
 import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs/promises';
-import { KiroCLIAdapter } from '../adapters/KiroCLIAdapter';
+import { KiroAdapter } from '../adapters/KiroAdapter';
 import { PAICore } from '../core/PAICore';
 
 const program = new Command();
@@ -54,15 +54,19 @@ async function main() {
     await backupExistingConfig();
   }
 
-  // Step 4: Initialize Kiro CLI adapter
-  console.log(chalk.yellow('\n🔧 Initializing Kiro CLI adapter...\n'));
-  const adapter = new KiroCLIAdapter();
+  // Step 4: Initialize Kiro adapter
+  console.log(chalk.yellow('\n🔧 Initializing Kiro adapter...\n'));
+  const adapter = new KiroAdapter();
   await adapter.initialize();
 
   // Step 5: Create PAI agent config FIRST so PAICore can inject into it
   if (config.createCustomAgent) {
     await createPAIAgent(adapter);
   }
+
+  // Step 5.5: Copy default PAI resources and transform paths in existing skills
+  await setupPAIDefaults(adapter);
+  await transformExistingSkills(adapter);
 
   // Step 6: Initialize PAI Core (injects Algorithm context, registers hooks)
   console.log(chalk.yellow('\n🚀 Initializing PAI Core...\n'));
@@ -78,11 +82,193 @@ async function main() {
     await migrateTelos(config.paiSourcePath, adapter);
   }
 
+  // Step 7.8: Register global prompts for Kiro CLI (shortcuts for skills)
+  await createGlobalPrompts(adapter);
+
   // Step 8: Create welcome message
   await createWelcomeMessage(adapter);
 
   console.log(chalk.green.bold('\n✅ Installation complete!\n'));
   printNextSteps();
+}
+
+// Helper to replace all occurrences of .claude paths with .kiro paths
+function replacePaths(content: string): string {
+  let updated = content;
+  // Replace .claude/PAI with .kiro/pai
+  updated = updated.replace(/\.claude\/PAI/g, '.kiro/pai');
+  // Replace .claude/skills with .kiro/skills
+  updated = updated.replace(/\.claude\/skills/g, '.kiro/skills');
+  // Replace .claude/hooks with .kiro/hooks
+  updated = updated.replace(/\.claude\/hooks/g, '.kiro/hooks');
+  // Replace remaining .claude with .kiro
+  updated = updated.replace(/\.claude/g, '.kiro');
+  // Replace remaining PAI references in JSON/configs/paths (case-sensitive where appropriate)
+  updated = updated.replace(/"PAI"/g, '"pai"');
+  updated = updated.replace(/'PAI'/g, "'pai'");
+  updated = updated.replace(/\/PAI\//g, '/pai/');
+  updated = updated.replace(/\/PAI$/gm, '/pai');
+  return updated;
+}
+
+// Check if a file is a text file that should be transformed
+function isTextFile(filename: string): boolean {
+  const ext = path.extname(filename).toLowerCase();
+  return ['.ts', '.md', '.sh', '.json', '.yaml', '.yml', '.txt', '.js'].includes(ext);
+}
+
+// Check if file exists
+async function fileExists(filePath: string): Promise<boolean> {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Find PAI-Kiro project root directory
+async function findProjectRoot(): Promise<string> {
+  let current = __dirname;
+  while (current !== path.dirname(current)) {
+    if (await fileExists(path.join(current, 'Releases', 'v5.0.0'))) {
+      return current;
+    }
+    current = path.dirname(current);
+  }
+  return path.join(__dirname, '..', '..', '..');
+}
+
+// Copy file and transform paths if it's a text file
+async function copyFileAndTransform(src: string, dest: string): Promise<void> {
+  await fs.mkdir(path.dirname(dest), { recursive: true });
+  if (isTextFile(src)) {
+    try {
+      const content = await fs.readFile(src, 'utf-8');
+      const transformed = replacePaths(content);
+      await fs.writeFile(dest, transformed, 'utf-8');
+    } catch (err) {
+      await fs.copyFile(src, dest);
+    }
+  } else {
+    await fs.copyFile(src, dest);
+  }
+}
+
+// Recursively copy and transform directory
+async function copyDirAndTransform(srcDir: string, destDir: string): Promise<void> {
+  const entries = await fs.readdir(srcDir, { withFileTypes: true });
+  await fs.mkdir(destDir, { recursive: true });
+
+  for (const entry of entries) {
+    const srcPath = path.join(srcDir, entry.name);
+    const destPath = path.join(destDir, entry.name);
+
+    if (entry.isDirectory()) {
+      await copyDirAndTransform(srcPath, destPath);
+    } else {
+      await copyFileAndTransform(srcPath, destPath);
+    }
+  }
+}
+
+// Recursively scan and transform paths in an existing directory (like ~/.kiro/skills)
+async function transformPathsInDirectory(dirPath: string): Promise<void> {
+  if (!(await fileExists(dirPath))) return;
+  const entries = await fs.readdir(dirPath, { withFileTypes: true });
+
+  for (const entry of entries) {
+    const fullPath = path.join(dirPath, entry.name);
+
+    if (entry.isDirectory()) {
+      await transformPathsInDirectory(fullPath);
+    } else if (entry.isFile() && isTextFile(entry.name)) {
+      try {
+        const content = await fs.readFile(fullPath, 'utf-8');
+        const transformed = replacePaths(content);
+        if (content !== transformed) {
+          await fs.writeFile(fullPath, transformed, 'utf-8');
+          console.log(chalk.gray(`  Transformed: ${path.relative(os.homedir(), fullPath)}`));
+        }
+      } catch (err) {
+        // ignore read/write errors
+      }
+    }
+  }
+}
+
+async function setupPAIDefaults(adapter: KiroAdapter): Promise<void> {
+  const projectRoot = await findProjectRoot();
+  const sourcePAIDir = path.join(projectRoot, 'Releases', 'v5.0.0', '.claude', 'PAI');
+  const targetPAIDir = adapter.getConfigDir();
+
+  console.log(chalk.yellow('\n📦 Copying and transforming default PAI resources...\n'));
+  
+  if (await fileExists(sourcePAIDir)) {
+    await copyDirAndTransform(sourcePAIDir, targetPAIDir);
+    console.log(chalk.green(`✅ Copied and transformed PAI core resources to ${targetPAIDir}`));
+  } else {
+    console.log(chalk.red(`❌ Source PAI directory not found at ${sourcePAIDir}`));
+  }
+}
+
+async function normalizeSkillsDirectory(skillsDir: string): Promise<void> {
+  if (!(await fileExists(skillsDir))) return;
+  const entries = await fs.readdir(skillsDir, { withFileTypes: true });
+
+  for (const entry of entries) {
+    if (entry.isDirectory()) {
+      const originalName = entry.name;
+      const lowerName = originalName.toLowerCase();
+      const originalPath = path.join(skillsDir, originalName);
+      const lowerPath = path.join(skillsDir, lowerName);
+
+      if (originalName !== lowerName) {
+        console.log(chalk.yellow(`  Naming normalization: ${originalName} -> ${lowerName}`));
+        try {
+          if (await fileExists(lowerPath)) {
+            // If the lowercase directory already exists, let's remove the uppercase one to avoid duplicates
+            await fs.rm(originalPath, { recursive: true, force: true });
+          } else {
+            await fs.rename(originalPath, lowerPath);
+          }
+        } catch (err) {
+          console.log(chalk.red(`  ❌ Failed to rename/remove directory ${originalName}:`, err));
+        }
+      }
+
+      // Now ensure the SKILL.md inside lowerPath is normalized
+      const skillFilePath = path.join(lowerPath, 'SKILL.md');
+      if (await fileExists(skillFilePath)) {
+        try {
+          let content = await fs.readFile(skillFilePath, 'utf-8');
+          const updatedContent = content.replace(/^(name:\s*)([^\r\n]+)/m, (match, prefix, nameVal) => {
+            const lowerNameVal = nameVal.trim().toLowerCase();
+            return prefix + lowerNameVal;
+          });
+          if (content !== updatedContent) {
+            await fs.writeFile(skillFilePath, updatedContent, 'utf-8');
+            console.log(chalk.green(`  Normalized frontmatter in ${lowerName}/SKILL.md`));
+          }
+        } catch (err) {
+          console.log(chalk.yellow(`  ⚠️  Failed to normalize yaml frontmatter in ${skillFilePath}:`, err));
+        }
+      }
+    }
+  }
+}
+
+async function transformExistingSkills(adapter: KiroAdapter): Promise<void> {
+  const skillsDir = adapter.getSkillsDir();
+  console.log(chalk.yellow('\n🔄 Transforming existing skills to match Kiro paths...\n'));
+  
+  if (await fileExists(skillsDir)) {
+    await normalizeSkillsDirectory(skillsDir);
+    await transformPathsInDirectory(skillsDir);
+    console.log(chalk.green('✅ Transformed all paths in skills directory'));
+  } else {
+    console.log(chalk.yellow('⚠️  Skills directory not found. Please ensure you have copied the skills.'));
+  }
 }
 
 async function checkPrerequisites(): Promise<void> {
@@ -214,7 +400,7 @@ async function backupExistingConfig(): Promise<void> {
   }
 }
 
-async function migrateSkills(sourcePath: string, adapter: KiroCLIAdapter): Promise<void> {
+async function migrateSkills(sourcePath: string, adapter: KiroAdapter): Promise<void> {
   console.log(chalk.yellow('\n🎯 Migrating skills...\n'));
 
   const sourceSkillsDir = path.join(sourcePath, 'skills');
@@ -226,7 +412,7 @@ async function migrateSkills(sourcePath: string, adapter: KiroCLIAdapter): Promi
 
     for (const skill of skills) {
       const sourcePath = path.join(sourceSkillsDir, skill);
-      const targetPath = path.join(targetSkillsDir, skill);
+      const targetPath = path.join(targetSkillsDir, skill.toLowerCase());
 
       const stat = await fs.stat(sourcePath);
       if (stat.isDirectory()) {
@@ -234,8 +420,24 @@ async function migrateSkills(sourcePath: string, adapter: KiroCLIAdapter): Promi
         try {
           await fs.access(skillFile);
           await fs.cp(sourcePath, targetPath, { recursive: true });
+
+          // Normalize target SKILL.md YAML frontmatter
+          const targetSkillFile = path.join(targetPath, 'SKILL.md');
+          try {
+            let content = await fs.readFile(targetSkillFile, 'utf-8');
+            const updatedContent = content.replace(/^(name:\s*)([^\r\n]+)/m, (match, prefix, nameVal) => {
+              const lowerNameVal = nameVal.trim().toLowerCase();
+              return prefix + lowerNameVal;
+            });
+            if (content !== updatedContent) {
+              await fs.writeFile(targetSkillFile, updatedContent, 'utf-8');
+            }
+          } catch (e) {
+            // ignore frontmatter normalization issues on individual files
+          }
+
           migrated++;
-          console.log(chalk.green(`  ✅ ${skill}`));
+          console.log(chalk.green(`  ✅ ${skill} -> ${skill.toLowerCase()}`));
         } catch {
           console.log(chalk.yellow(`  ⚠️  ${skill} (no SKILL.md)`));
         }
@@ -248,7 +450,7 @@ async function migrateSkills(sourcePath: string, adapter: KiroCLIAdapter): Promi
   }
 }
 
-async function migrateTelos(sourcePath: string, adapter: KiroCLIAdapter): Promise<void> {
+async function migrateTelos(sourcePath: string, adapter: KiroAdapter): Promise<void> {
   console.log(chalk.yellow('\n📖 Migrating TELOS...\n'));
 
   const sourceTelosDir = path.join(sourcePath, 'PAI', 'USER', 'TELOS');
@@ -258,39 +460,13 @@ async function migrateTelos(sourcePath: string, adapter: KiroCLIAdapter): Promis
   try {
     await fs.mkdir(targetTelosDir, { recursive: true });
     await fs.cp(sourceTelosDir, targetTelosDir, { recursive: true });
-    
-    // Also create steering file from TELOS
-    await createTelosSteering(targetTelosDir, adapter);
-    
     console.log(chalk.green('✅ TELOS migrated\n'));
   } catch (error) {
     console.log(chalk.yellow('⚠️  No TELOS found to migrate\n'));
   }
 }
 
-async function createTelosSteering(telosDir: string, adapter: KiroCLIAdapter): Promise<void> {
-  const steeringPath = path.join(adapter.getSteeringDir(), 'pai-telos.md');
-  
-  let content = '# PAI TELOS - Your Life Operating System\n\n';
-  content += 'This file contains your goals, mission, and beliefs that guide all AI decisions.\n\n';
-  
-  try {
-    const files = await fs.readdir(telosDir);
-    for (const file of files) {
-      if (file.endsWith('.md')) {
-        const filePath = path.join(telosDir, file);
-        const fileContent = await fs.readFile(filePath, 'utf-8');
-        content += `## ${file.replace('.md', '')}\n\n${fileContent}\n\n`;
-      }
-    }
-    
-    await fs.writeFile(steeringPath, content);
-  } catch (error) {
-    console.warn('Could not create TELOS steering file');
-  }
-}
-
-async function createPAIAgent(adapter: KiroCLIAdapter): Promise<void> {
+async function createPAIAgent(adapter: KiroAdapter): Promise<void> {
   console.log(chalk.yellow('\n🤖 Creating PAI custom agent...\n'));
 
   await adapter.createCustomAgent({
@@ -306,12 +482,17 @@ async function createPAIAgent(adapter: KiroCLIAdapter): Promise<void> {
 
 Always prioritize the user's ideal state and long-term goals over short-term convenience.`,
     tools: ['*'], // All tools
+    resources: [
+      "skill://.kiro/skills/**/SKILL.md",
+      "skill:///home/ubuntu/.kiro/skills/**/SKILL.md",
+      "skill://~/.kiro/skills/**/SKILL.md"
+    ]
   });
 
   console.log(chalk.green('✅ PAI agent created\n'));
 }
 
-async function createWelcomeMessage(adapter: KiroCLIAdapter): Promise<void> {
+async function createWelcomeMessage(adapter: KiroAdapter): Promise<void> {
   const welcomeContent = `# Welcome to PAI on Kiro CLI! 🎉
 
 PAI (Personal AI Infrastructure) is now running on your Kiro CLI.
@@ -373,16 +554,38 @@ PAI has 45+ skills available. Just describe what you need and PAI will use the r
   await fs.writeFile(welcomePath, welcomeContent);
 }
 
+async function createGlobalPrompts(adapter: KiroAdapter): Promise<void> {
+  const promptsDir = path.join(os.homedir(), '.kiro', 'prompts');
+  console.log(chalk.yellow('\n📝 Creating global prompt shortcuts for skills...\n'));
+  
+  await fs.mkdir(promptsDir, { recursive: true });
+  
+  await fs.writeFile(
+    path.join(promptsDir, 'interview.md'),
+    'start the interview $ARGUMENTS',
+    'utf-8'
+  );
+  
+  await fs.writeFile(
+    path.join(promptsDir, 'telos.md'),
+    'review TELOS $ARGUMENTS',
+    'utf-8'
+  );
+  
+  console.log(chalk.green('✅ Registered global prompts: @interview and @telos'));
+}
+
 function printNextSteps(): void {
   console.log(chalk.cyan('📚 Next Steps:\n'));
   console.log(chalk.white('1. Start Kiro CLI with PAI agent:'));
   console.log(chalk.gray('   kiro-cli chat --agent pai\n'));
-  console.log(chalk.white('2. Define your TELOS (goals, mission, beliefs)\n'));
-  console.log(chalk.white('3. Start using PAI skills and capabilities!\n'));
+  console.log(chalk.white('2. Use @interview or @telos to trigger the respective workflows!\n'));
+  console.log(chalk.white('3. Define your TELOS (goals, mission, beliefs)\n'));
+  console.log(chalk.white('4. Start using PAI skills and capabilities!\n'));
   
   console.log(chalk.cyan('📖 Documentation:\n'));
   console.log(chalk.gray(`   Welcome: ~/.kiro/pai/WELCOME.md`));
-  console.log(chalk.gray(`   Agent Config: .kiro/agents/pai-agent.json\n`));
+  console.log(chalk.gray(`   Agent Config: ~/.kiro/agents/pai.json\n`));
 }
 
 // Run installer

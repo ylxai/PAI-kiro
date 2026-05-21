@@ -1,231 +1,125 @@
-# PAI-Kiro: Universal AI Infrastructure
+# PAI-Kiro: Personal AI Infrastructure for Kiro CLI 🚀
 
-**Personal AI Infrastructure adapted for Kiro (IDE & CLI)**
+**Integrasi Personal AI Infrastructure (PAI) milik Daniel Miessler untuk lingkungan Kiro CLI.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Version](https://img.shields.io/badge/version-0.2.0-blue.svg)](https://github.com/ylxai/PAI-kiro)
-[![Platform](https://img.shields.io/badge/platform-Kiro%20CLI%20%7C%20IDE-green.svg)](https://kiro.dev)
+[![Version](https://img.shields.io/badge/version-0.3.0-blue.svg)](https://github.com/ylxai/PAI-kiro)
+[![Platform](https://img.shields.io/badge/platform-Kiro%20CLI-green.svg)](https://kiro.dev)
 
-> Bringing the power of PAI's Life Operating System to Kiro CLI and IDE
+> Membawa kekuatan PAI's Life Operating System ke dalam terminal Anda menggunakan Kiro CLI dan runtime Bun.
 
 ---
 
-## 🎯 What is PAI-Kiro?
+## 🎯 Apa itu PAI-Kiro?
 
-PAI-Kiro is an adaptation layer that enables [Personal AI Infrastructure (PAI)](https://github.com/danielmiessler/Personal_AI_Infrastructure) to run on **Kiro CLI** and **Kiro IDE**. It provides a platform-agnostic core that maps PAI's powerful features to Kiro's native capabilities.
+**PAI-Kiro** adalah lapisan adaptasi yang memungkinkan [Personal AI Infrastructure (PAI)](https://github.com/danielmiessler/Personal_AI_Infrastructure) untuk berjalan secara mulus di **Kiro CLI**. Proyek ini memetakan seluruh kapabilitas utama PAI ke dalam fitur bawaan Kiro CLI seperti custom agents, shell hooks, memory, dan skills.
 
-### Key Features
+### Fitur Utama
 
-- ✅ **45+ Skills** - Specialized AI capabilities (Research, Council, RedTeam, ISA, etc.)
-- ✅ **Hook System** - Automated workflows on events
-- ✅ **Memory System** - Persistent knowledge and learning
-- ✅ **Algorithm v6.3.0** - 7-phase problem-solving loop
-- ✅ **TELOS** - Your goals and mission guide every decision
-- ✅ **Custom Agents** - Specialized agents for different workflows (CLI only)
+* **✅ 45+ Skills** - Pustaka kemampuan AI yang terspesialisasi (Research, Council, RedTeam, dll.) langsung siap pakai.
+* **✅ Hook System** - Alur kerja otomatis berbasis event (`SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, dan `Stop`).
+* **✅ Memory System** - Penyimpanan pengetahuan dan riwayat yang persisten antar sesi percakapan.
+* **✅ Algorithm v6.3.0** - Pendekatan pemecahan masalah sistematis melalui 7-phase loop (`OBSERVE` → `THINK` → `PLAN` → `BUILD` → `EXECUTE` → `VERIFY` → `LEARN`).
+* **✅ TELOS** - Penyelarasan penuh tindakan AI dengan misi, tujuan hidup, dan nilai-nilai Anda.
+* **✅ Custom Agents** - Agen kustom `pai` yang dikonfigurasi secara otomatis untuk Kiro CLI.
 
-## 🔀 Kiro CLI vs Kiro IDE
-
-PAI-Kiro supports **both** Kiro CLI and Kiro IDE, but they have different features:
-
-| Feature | Kiro CLI | Kiro IDE |
-|---------|----------|----------|
-| **Type** | Terminal tool | Desktop app |
-| **Hooks** | ✅ 5 types | ✅ 9 types |
-| **Steering** | ✅ Always loaded | ✅ Conditional modes |
-| **Skills** | ✅ Agent Skills | ✅ Agent Skills |
-| **Custom Agents** | ✅ Yes | ❌ No |
-| **Specs** | ❌ No | ✅ Yes |
-| **MCP** | ✅ Yes | ✅ Yes |
-| **Installation** | Already installed | Separate install |
-
-**Most users want Kiro CLI** - it's the command-line tool that's actively maintained.
+---
 
 ## 🚀 Quick Start (Kiro CLI)
 
-### Prerequisites
+### Prasyarat
 
-- [Kiro CLI](https://kiro.dev/cli) installed
-- [Bun](https://bun.sh) runtime (v1.0.0+)
-- Git
+Sebelum menginstal, pastikan sistem Anda memiliki:
+1. **[Kiro CLI](https://kiro.dev/cli)** terpasang (`kiro-cli --version`)
+2. **[Bun](https://bun.sh)** runtime terpasang (`bun --version` >= v1.0.0)
+3. **Git** terpasang
 
-### Installation
+### Instalasi Satu Perintah
 
-```bash
-# Clone the repository
-git clone https://github.com/ylxai/PAI-kiro.git
-cd PAI-kiro/kiro-adapter
-
-# Install dependencies
-bun install
-
-# Run the Kiro CLI installer
-bun run install:kiro-cli
-```
-
-The installer will:
-1. Check prerequisites (Kiro CLI, Bun, Git)
-2. Setup PAI directories
-3. Migrate existing PAI (optional)
-4. Create PAI custom agent
-5. Setup core hooks
-
-### First Steps
-
-After installation:
+Jalankan perintah berikut di direktori root proyek untuk menginstal PAI-Kiro:
 
 ```bash
-# 1. Navigate to your project
-cd your-project
+# Berikan izin eksekusi jika diperlukan
+chmod +x install.sh
 
-# 2. Start Kiro CLI with PAI agent
-kiro-cli --agent pai
-
-# 3. Define your TELOS (goals, mission, beliefs)
-# Just tell PAI about your goals in the chat
-
-# 4. Start using PAI!
+# Jalankan skrip instalasi
+./install.sh
 ```
 
-## 📚 Documentation
-
-- **[KIRO_CLI_GUIDE.md](./KIRO_CLI_GUIDE.md)** - Complete Kiro CLI guide
-- **[KIRO_ADAPTATION.md](./KIRO_ADAPTATION.md)** - Architecture overview
-- **[MIGRATION_GUIDE.md](./MIGRATION_GUIDE.md)** - Migration from Claude Code
-- **[QUICK_REFERENCE.md](./QUICK_REFERENCE.md)** - Quick commands
-
-## 🔄 How It Works
-
-PAI-Kiro uses a platform adapter pattern:
-
-```
-┌─────────────────────────────────────┐
-│          PAI Core                   │
-│  (Platform Agnostic)                │
-│  - Algorithm v6.3.0                 │
-│  - Memory System                    │
-│  - Skills System                    │
-│  - TELOS                            │
-└─────────────────────────────────────┘
-                 │
-                 ▼
-┌─────────────────────────────────────┐
-│      Platform Adapter               │
-│      Interface                      │
-└─────────────────────────────────────┘
-                 │
-        ┌────────┴────────┐
-        ▼                 ▼
-┌──────────────┐  ┌──────────────┐
-│  Kiro CLI    │  │  Kiro IDE    │
-│  Adapter     │  │  Adapter     │
-└──────────────┘  └──────────────┘
-```
-
-## 🗺️ Feature Mapping (Kiro CLI)
-
-| PAI Feature | Kiro CLI | Compatibility |
-|-------------|----------|---------------|
-| Skills | Agent Skills | ✅ 100% |
-| Hooks (5/8) | CLI Hooks | ✅ 80% |
-| Context | Steering | ✅ 100% |
-| Memory | File-based | ✅ 100% |
-| MCP | MCP | ✅ 100% |
-| Custom Agents | ✅ Native | ✅ 100% |
-| Specs/ISA | ❌ N/A | N/A |
-
-## 📦 Project Structure
-
-```
-PAI-kiro/
-├── Releases/v5.0.0/          # Original PAI (Claude Code)
-│   └── .claude/              # PAI core system
-│
-├── kiro-adapter/             # Kiro adaptation layer
-│   ├── src/
-│   │   ├── adapters/
-│   │   │   ├── PlatformAdapter.ts      # Universal interface
-│   │   │   ├── KiroCLIAdapter.ts       # Kiro CLI (NEW)
-│   │   │   └── KiroAdapter.ts          # Kiro IDE (legacy)
-│   │   ├── core/
-│   │   │   └── PAICore.ts              # Platform-agnostic
-│   │   └── cli/
-│   │       ├── install-cli.ts          # CLI installer
-│   │       └── install.ts              # IDE installer
-│   └── package.json
-│
-├── docs/                     # Documentation
-├── KIRO_CLI_GUIDE.md        # CLI-specific guide
-└── README.md                # This file
-```
-
-## 🎯 Roadmap
-
-### Phase 1: Foundation ✅ (Complete)
-- [x] Platform adapter interface
-- [x] Kiro IDE adapter
-- [x] Documentation
-
-### Phase 2: CLI Support ✅ (Current)
-- [x] Kiro CLI adapter
-- [x] Custom agents support
-- [x] CLI-specific hooks
-- [x] CLI installer
-
-### Phase 3: Testing (Next)
-- [ ] Skills migration testing
-- [ ] Hook system validation
-- [ ] Memory persistence tests
-- [ ] Custom agent examples
-
-### Phase 4: Advanced Features
-- [ ] Standalone Pulse daemon
-- [ ] Voice notifications
-- [ ] Multi-platform support
-
-## 🤝 Contributing
-
-Contributions are welcome! See [CONTRIBUTING.md](./CONTRIBUTING.md) for guidelines.
-
-### Development Setup
-
-```bash
-# Clone your fork
-git clone https://github.com/YOUR_USERNAME/PAI-kiro.git
-cd PAI-kiro/kiro-adapter
-
-# Install dependencies
-bun install
-
-# Run in development mode
-bun run dev
-
-# Run tests
-bun test
-
-# Build
-bun run build
-```
-
-## 📝 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## 🙏 Acknowledgments
-
-- **[Daniel Miessler](https://github.com/danielmiessler)** - Creator of [Personal AI Infrastructure](https://github.com/danielmiessler/Personal_AI_Infrastructure)
-- **[AWS](https://aws.amazon.com/)** - For Kiro CLI and IDE
-- **PAI Community** - For the amazing Life OS vision
-
-## 📞 Support
-
-- **Issues:** [GitHub Issues](https://github.com/ylxai/PAI-kiro/issues)
-- **Discussions:** [GitHub Discussions](https://github.com/ylxai/PAI-kiro/discussions)
-- **Original PAI:** [danielmiessler/Personal_AI_Infrastructure](https://github.com/danielmiessler/Personal_AI_Infrastructure)
-- **Kiro CLI:** [kiro.dev/cli](https://kiro.dev/cli)
-- **Kiro IDE:** [kiro.dev](https://kiro.dev)
+Skrip `install.sh` akan:
+1. Memverifikasi ketersediaan Bun, Kiro CLI, dan Git.
+2. Mengunduh dependensi untuk `pai-core` dan `kiro-adapter` menggunakan Bun.
+3. Membuat direktori konfigurasi global Kiro (`~/.kiro/`).
+4. Mengonfigurasi agen kustom `pai` (`~/.kiro/agents/pai.json`).
+5. Memasang skrip hook shell otomatis (`~/.kiro/hooks/`).
 
 ---
 
-**Built with ❤️ by the PAI-Kiro community**
+## 💬 Cara Penggunaan
 
-*Bringing the Life Operating System to Kiro CLI and IDE*
+Setelah instalasi berhasil, Anda dapat langsung mulai berinteraksi dengan agen PAI Anda:
+
+```bash
+# Jalankan sesi chat Kiro CLI menggunakan agen PAI
+kiro-cli chat --agent pai
+```
+
+### Konfigurasi Penting
+
+* **Agent Config**: `~/.kiro/agents/pai.json`
+* **Skills Directory**: `~/.kiro/skills/`
+* **Hooks Directory**: `~/.kiro/hooks/`
+* **Memory Directory**: `~/.kiro/pai/MEMORY/`
+
+---
+
+## 📦 Struktur Proyek
+
+```
+PAI-kiro/
+├── Releases/v5.0.0/          # PAI original core (Claude Code)
+│   └── .claude/              # System PAI
+│
+├── pai-core/                 # Core logic platform-agnostic PAI
+│
+├── kiro-adapter/             # Lapisan adaptasi untuk Kiro CLI
+│   ├── src/
+│   │   ├── adapters/
+│   │   │   └── KiroAdapter.ts       # Adapter utama Kiro CLI
+│   │   ├── core/
+│   │   │   └── PAICore.ts           # Loader PAI Core
+│   │   └── cli/
+│   │       └── install-cli.ts       # Wizard Installer (TypeScript)
+│   └── package.json
+│
+├── install.sh                # Skrip instalasi bootstrap global
+├── KIRO_CLI_GUIDE.md        # Panduan penggunaan lengkap Kiro CLI
+└── README.md                # Dokumentasi ini
+```
+
+---
+
+## 🤝 Kontribusi
+
+Kontribusi sangat kami harapkan! Silakan baca [CONTRIBUTING.md](./CONTRIBUTING.md) untuk panduan berkontribusi.
+
+### Pengembangan Lokal
+
+```bash
+# Clone fork Anda
+git clone https://github.com/YOUR_USERNAME/PAI-kiro.git
+cd PAI-kiro/kiro-adapter
+
+# Install dependensi
+bun install
+
+# Jalankan dalam mode watch
+bun run dev
+
+# Jalankan test suite
+bun test
+```
+
+---
+
+**Dibuat dengan ❤️ oleh komunitas PAI-Kiro**

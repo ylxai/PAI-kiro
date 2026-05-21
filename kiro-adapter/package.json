@@ -10,8 +10,7 @@
     "test": "bun test",
     "lint": "eslint src --ext .ts",
     "format": "prettier --write 'src/**/*.ts'",
-    "install:kiro-ide": "bun run src/cli/install.ts",
-    "install:kiro-cli": "bun run src/cli/install-cli.ts"
+    "install:kiro-cli": "bun src/cli/install-cli.ts"
   },
   "keywords": [
     "pai",

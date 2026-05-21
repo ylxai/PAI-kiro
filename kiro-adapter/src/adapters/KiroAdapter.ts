@@ -1,8 +1,8 @@
 /**
- * Kiro Platform Adapter
+ * Kiro CLI Platform Adapter
  * 
- * Adapts PAI to work with Kiro IDE by mapping PAI concepts to Kiro's
- * native features: hooks, steering, skills, and specs.
+ * Adapts PAI to work with Kiro CLI by mapping PAI concepts to Kiro CLI's
+ * native features: hooks, steering, skills, and custom agents.
  */
 
 import * as path from 'path';
@@ -19,20 +19,44 @@ import {
   HookContext,
 } from './PlatformAdapter';
 
+export interface KiroAgentConfig {
+  name: string;
+  description?: string;
+  prompt?: string;              // Agent's system prompt
+  mcpServers?: Record<string, any>;
+  tools?: string[];
+  allowedTools?: string[];
+  includeMcpJson?: boolean;
+  hooks?: Record<string, KiroHook[]>;  // Hooks grouped by event type
+  model?: string;
+  resources?: string[];
+}
+
+export interface KiroHook {
+  command: string;
+  matcher?: string;
+  timeout_ms?: number;
+  cache_ttl_seconds?: number;
+}
+
 export class KiroAdapter extends BasePlatformAdapter {
   config: PlatformConfig;
+  private agentConfigPath: string;
 
   constructor() {
     super();
     this.config = {
-      name: 'kiro',
-      version: '0.1.0',
+      name: 'kiro-cli',
+      version: '0.3.0',
       configDir: path.join(os.homedir(), '.kiro', 'pai'),
-      steeringDir: path.join(os.homedir(), '.kiro', 'steering'),
-      skillsDir: path.join(process.cwd(), '.kiro', 'skills'),
-      hooksDir: path.join(process.cwd(), '.kiro', 'hooks'),
+      steeringDir: undefined, // Kiro CLI doesn't use steering, uses agent prompt instead
+      skillsDir: path.join(os.homedir(), '.kiro', 'skills'),
+      hooksDir: path.join(os.homedir(), '.kiro', 'hooks'), // Global hooks directory
       memoryDir: path.join(os.homedir(), '.kiro', 'pai', 'MEMORY'),
     };
+    
+    // Agent configs are in ~/.kiro/agents/ (global, not workspace)
+    this.agentConfigPath = path.join(os.homedir(), '.kiro', 'agents', 'pai.json');
   }
 
   async initialize(): Promise<void> {
@@ -41,21 +65,21 @@ export class KiroAdapter extends BasePlatformAdapter {
     // Create necessary directories
     await this.ensureDirectories();
     
-    // Verify Kiro is available
+    // Verify Kiro CLI is available
     const available = await this.isAvailable();
     if (!available) {
-      throw new Error('Kiro IDE not detected. Please install Kiro first.');
+      throw new Error('Kiro CLI not detected. Please install Kiro CLI first: curl -fsSL https://cli.kiro.dev/install | bash');
     }
     
-    console.log('✅ Kiro adapter initialized successfully');
+    console.log('✅ Kiro CLI adapter initialized successfully');
   }
 
   private async ensureDirectories(): Promise<void> {
     const dirs = [
       this.config.configDir,
-      this.config.steeringDir!,
       this.config.skillsDir,
       this.config.hooksDir,
+      path.join(os.homedir(), '.kiro', 'agents'),
       this.config.memoryDir,
     ];
 
@@ -69,7 +93,9 @@ export class KiroAdapter extends BasePlatformAdapter {
   }
 
   getSteeringDir(): string {
-    return this.config.steeringDir!;
+    // Kiro CLI doesn't use steering directory
+    // Context is injected via agent prompt field
+    return '';
   }
 
   getSkillsDir(): string {
@@ -85,290 +111,354 @@ export class KiroAdapter extends BasePlatformAdapter {
   }
 
   /**
-   * Register a PAI hook by converting it to Kiro hook format
+   * Register a PAI hook by adding it to the PAI agent configuration
+   * and generating the corresponding shell script.
    */
   async registerHook(event: HookEvent): Promise<void> {
-    const kiroHook = this.convertToKiroHook(event);
-    const hookPath = path.join(this.config.hooksDir, `${event.name}.json`);
+    // Load or create agent config
+    let agentConfig = await this.loadAgentConfig();
     
-    await fs.writeFile(hookPath, JSON.stringify(kiroHook, null, 2));
+    // Map PAI hook types to Kiro CLI event type keys
+    const kiroEventType = this.mapToKiroEventType(event.type);
+    
+    // Convert PAI hook to Kiro CLI hook format (no event field)
+    const kiroHook = this.convertToKiroHook(event);
+    
+    // Generate the shell script for this hook
+    await this.writeHookScript(event, kiroEventType);
+    
+    // Initialize hooks object if needed
+    if (!agentConfig.hooks) {
+      agentConfig.hooks = {};
+    }
+    
+    // Initialize array for this event type if needed
+    if (!agentConfig.hooks[kiroEventType]) {
+      agentConfig.hooks[kiroEventType] = [];
+    }
+    
+    // Remove existing hook with same command
+    agentConfig.hooks[kiroEventType] = agentConfig.hooks[kiroEventType].filter(
+      (h: KiroHook) => h.command !== kiroHook.command
+    );
+    
+    // Add new hook
+    agentConfig.hooks[kiroEventType].push(kiroHook);
+    
+    // Save agent config
+    await this.saveAgentConfig(agentConfig);
+    
     console.log(`✅ Registered hook: ${event.name}`);
   }
 
-  /**
-   * Convert PAI hook to Kiro hook format
-   */
-  private convertToKiroHook(event: HookEvent): any {
-    // Map PAI hook types to Kiro hook types
-    const hookTypeMapping: Record<string, string> = {
-      'UserPromptSubmit': 'PromptSubmit',
-      'PreToolUse': 'PreToolUse',
-      'PostToolUse': 'PostToolUse',
-      'Stop': 'AgentStop',
-      'FileCreate': 'FileCreate',
-      'FileSave': 'FileSave',
-      'FileDelete': 'FileDelete',
-      'PreTaskExecution': 'PreTaskExecution',
-      'PostTaskExecution': 'PostTaskExecution',
-      'ManualTrigger': 'ManualTrigger',
+  private mapToKiroEventType(paiHookType: HookType): string {
+    const mapping: Record<string, string> = {
+      'SessionStart': 'agentSpawn',
+      'UserPromptSubmit': 'userPromptSubmit',
+      'PreToolUse': 'preToolUse',
+      'PostToolUse': 'postToolUse',
+      'Stop': 'stop',
     };
-
-    const kiroEventType = hookTypeMapping[event.type] || 'ManualTrigger';
-
-    const kiroHook: any = {
-      title: event.name,
-      description: event.description,
-      event: kiroEventType,
-      action: 'ask-kiro', // Default to agent prompt action
-      instructions: this.generateHookInstructions(event),
-    };
-
-    // Add optional fields
-    if (event.options?.filePattern) {
-      kiroHook.filePattern = event.options.filePattern;
-    }
-
-    if (event.options?.toolName) {
-      kiroHook.toolName = event.options.toolName;
-    }
-
-    if (event.options?.timeout) {
-      kiroHook.timeout = event.options.timeout;
-    }
-
-    return kiroHook;
+    return mapping[paiHookType] || 'agentSpawn';
   }
 
   /**
-   * Generate instructions for Kiro hook from PAI handler
+   * Generate a Kiro CLI shell script for a PAI hook
    */
-  private generateHookInstructions(event: HookEvent): string {
-    // For now, convert handler to string
-    // In production, this would be more sophisticated
-    return `# ${event.name}\n\n${event.description}\n\n## Handler\n\`\`\`typescript\n${event.handler.toString()}\n\`\`\``;
+  private async writeHookScript(event: HookEvent, kiroEventType: string): Promise<void> {
+    const scriptPath = path.join(os.homedir(), '.kiro', 'hooks', `pai-${event.name}.sh`);
+
+    let script = '#!/bin/bash\n';
+    script += '# PAI Hook: ' + event.name + '\n';
+    script += '# Event: ' + kiroEventType + '\n';
+    script += '# Description: ' + (event.description || '') + '\n';
+    script += '# Generated by PAI-Kiro adapter\n\n';
+
+    switch (kiroEventType) {
+      case 'agentSpawn':
+        script += this.generateAgentSpawnScript(event);
+        break;
+      case 'userPromptSubmit':
+        script += this.generateUserPromptSubmitScript(event);
+        break;
+      case 'preToolUse':
+        script += this.generatePreToolUseScript(event);
+        break;
+      case 'postToolUse':
+        script += this.generatePostToolUseScript(event);
+        break;
+      case 'stop':
+        script += this.generateStopScript(event);
+        break;
+    }
+
+    await fs.writeFile(scriptPath, script);
+    await fs.chmod(scriptPath, 0o755);
+  }
+
+  private generateAgentSpawnScript(event: HookEvent): string {
+    return `# PAI AgentSpawn hook: ${event.name}
+HOOK_EVENT=$1
+INPUT=$(cat)
+
+# Output PAI context to STDOUT (added to agent context by Kiro CLI)
+cat << 'PAIEOF'
+=== PAI Context ===
+PAI v5.0.0 running on Kiro CLI v2.2.2
+Algorithm: v6.3.0 (OBSERVE → THINK → PLAN → BUILD → EXECUTE → VERIFY → LEARN)
+Memory: ~/.kiro/pai/MEMORY/
+Skills: ~/.kiro/skills/
+
+Core Capabilities:
+- 45+ specialized skills
+- 7-phase Algorithm loop
+- TELOS goal system
+- Persistent memory
+- Platform-agnostic architecture
+PAIEOF
+
+exit 0
+`;
+  }
+
+  private generateUserPromptSubmitScript(event: HookEvent): string {
+    return `# PAI UserPromptSubmit hook: ${event.name}
+INPUT=$(cat)
+
+# Classify prompt mode based on complexity
+# Modes: MINIMAL (<90s), NATIVE (90s-5min), ALGORITHM (>5min)
+
+PROMPT=$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('prompt',''))" 2>/dev/null)
+
+if [ -n "$PROMPT" ]; then
+  PROMPT_LEN=$(echo "$PROMPT" | wc -c)
+  if [ "$PROMPT_LEN" -lt 100 ]; then
+    echo "Mode: MINIMAL (quick task)"
+  elif [ "$PROMPT_LEN" -lt 500 ]; then
+    echo "Mode: NATIVE (standard task)"
+  else
+    echo "Mode: ALGORITHM (complex task - use 7-phase loop)"
+  fi
+fi
+
+exit 0
+`;
+  }
+
+  private generatePreToolUseScript(event: HookEvent): string {
+    return `# PAI PreToolUse hook: ${event.name}
+INPUT=$(cat)
+
+TOOL_NAME=$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('tool_name',''))" 2>/dev/null)
+TOOL_INPUT=$(echo "$INPUT" | python3 -c "import sys,json; print(json.dumps(json.load(sys.stdin).get('tool_input',{})))" 2>/dev/null)
+
+# Log tool usage attempt
+echo "[PAI] Pre-tool check: $TOOL_NAME" >&2
+
+# Exit 0 to allow, exit 2 to block
+exit 0
+`;
+  }
+
+  private generatePostToolUseScript(event: HookEvent): string {
+    return `# PAI PostToolUse hook: ${event.name}
+INPUT=$(cat)
+
+TOOL_NAME=$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('tool_name',''))" 2>/dev/null)
+TOOL_RESPONSE=$(echo "$INPUT" | python3 -c "import sys,json; print(json.dumps(json.load(sys.stdin).get('tool_response',{})))" 2>/dev/null)
+
+# Log tool activity to PAI memory
+MEMORY_DIR="$HOME/.kiro/pai/MEMORY/OBSERVABILITY"
+mkdir -p "$MEMORY_DIR"
+
+echo '{"timestamp":"'"$(date -Iseconds)"'","tool":"'"$TOOL_NAME"'","success":true}' >> "$MEMORY_DIR/tool-activity.jsonl"
+
+exit 0
+`;
+  }
+
+  private generateStopScript(event: HookEvent): string {
+    return `# PAI Stop hook: ${event.name}
+INPUT=$(cat)
+
+# Capture session learnings
+SESSION_ID=$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('session_id','unknown'))" 2>/dev/null)
+
+echo "[PAI] Session $SESSION_ID completed" >&2
+
+exit 0
+`;
+  }
+
+  /**
+   * Convert PAI hook to Kiro CLI hook format
+   */
+  private convertToKiroHook(event: HookEvent): KiroHook {
+    // Hook scripts are in global ~/.kiro/hooks/ directory
+    // Use tilde notation for Kiro CLI compatibility (matches existing configs)
+    const hookScriptPath = `~/.kiro/hooks/pai-${event.name}.sh`;
+
+    const hook: KiroHook = {
+      command: hookScriptPath,
+      timeout_ms: event.options?.timeout || 30000,
+    };
+
+    // Add matcher for tool-specific hooks
+    if (event.options?.toolName) {
+      hook.matcher = event.options.toolName;
+    }
+
+    return hook;
   }
 
   async unregisterHook(hookName: string): Promise<void> {
-    const hookPath = path.join(this.config.hooksDir, `${hookName}.json`);
+    let agentConfig = await this.loadAgentConfig();
     
-    try {
-      await fs.unlink(hookPath);
-      console.log(`✅ Unregistered hook: ${hookName}`);
-    } catch (error) {
-      console.warn(`⚠️  Hook not found: ${hookName}`);
+    if (agentConfig.hooks) {
+      // Remove hook from all event types
+      for (const eventType in agentConfig.hooks) {
+        agentConfig.hooks[eventType] = agentConfig.hooks[eventType].filter(
+          (h: KiroHook) => !h.command.includes(hookName)
+        );
+      }
+      await this.saveAgentConfig(agentConfig);
     }
+    
+    console.log(`✅ Unregistered hook: ${hookName}`);
   }
 
   async listHooks(): Promise<HookEvent[]> {
-    const files = await fs.readdir(this.config.hooksDir);
+    const agentConfig = await this.loadAgentConfig();
     const hooks: HookEvent[] = [];
 
-    for (const file of files) {
-      if (file.endsWith('.json')) {
-        const hookPath = path.join(this.config.hooksDir, file);
-        const content = await fs.readFile(hookPath, 'utf-8');
-        const kiroHook = JSON.parse(content);
-        
-        // Convert back to PAI format
-        hooks.push(this.convertFromKiroHook(kiroHook));
+    if (agentConfig.hooks) {
+      for (const eventType in agentConfig.hooks) {
+        for (const kiroHook of agentConfig.hooks[eventType]) {
+          hooks.push(this.convertFromKiroHook(kiroHook, eventType));
+        }
       }
     }
 
     return hooks;
   }
 
-  private convertFromKiroHook(kiroHook: any): HookEvent {
+  private convertFromKiroHook(kiroHook: KiroHook, eventType: string): HookEvent {
     const reverseMapping: Record<string, HookType> = {
-      'PromptSubmit': 'UserPromptSubmit',
-      'PreToolUse': 'PreToolUse',
-      'PostToolUse': 'PostToolUse',
-      'AgentStop': 'Stop',
-      'FileCreate': 'FileCreate',
-      'FileSave': 'FileSave',
-      'FileDelete': 'FileDelete',
-      'PreTaskExecution': 'PreTaskExecution',
-      'PostTaskExecution': 'PostTaskExecution',
-      'ManualTrigger': 'ManualTrigger',
+      'agentSpawn': 'SessionStart',
+      'userPromptSubmit': 'UserPromptSubmit',
+      'preToolUse': 'PreToolUse',
+      'postToolUse': 'PostToolUse',
+      'stop': 'Stop',
     };
 
+    const hookName = path.basename(kiroHook.command, '.sh');
+
     return {
-      type: reverseMapping[kiroHook.event] || 'ManualTrigger',
-      name: kiroHook.title,
-      description: kiroHook.description,
+      type: reverseMapping[eventType] || 'SessionStart',
+      name: hookName,
+      description: `Kiro CLI hook: ${eventType}`,
       handler: async (context: HookContext) => {
-        // Placeholder handler
-        console.log(`Hook ${kiroHook.title} triggered`);
+        console.log(`Hook ${hookName} triggered`);
       },
       options: {
-        filePattern: kiroHook.filePattern,
-        toolName: kiroHook.toolName,
-        timeout: kiroHook.timeout,
+        toolName: kiroHook.matcher,
+        timeout: kiroHook.timeout_ms,
       },
     };
   }
 
   /**
-   * Inject context as Kiro steering file
+   * Inject context into PAI agent prompt
+   * Kiro CLI doesn't use steering files - context goes into agent's prompt field
+   */
+  /**
+   * Inject context into PAI agent prompt.
+   * Cleans old versions of the same section if they exist to prevent duplicates.
    */
   async injectContext(injection: ContextInjection): Promise<void> {
-    const steeringDir = injection.type === 'global' 
-      ? this.config.steeringDir!
-      : path.join(process.cwd(), '.kiro', 'steering');
+    // Load current agent config
+    const agentConfig = await this.loadAgentConfig();
+    let prompt = agentConfig.prompt || '';
 
-    await fs.mkdir(steeringDir, { recursive: true });
+    // Define content headers to identify sections
+    const sections = [
+      { key: '# TELOS - Your Life Operating System', header: '# GLOBAL CONTEXT\n\n# TELOS - Your Life Operating System' },
+      { key: '# The Algorithm v6.3.0', header: '# GLOBAL CONTEXT\n\n# The Algorithm v6.3.0' }
+    ];
 
-    // Generate filename from content hash or timestamp
-    const filename = `pai-${injection.type}-${Date.now()}.md`;
-    const filePath = path.join(steeringDir, filename);
+    let foundSection = false;
 
-    // Create frontmatter based on injection mode
-    const frontmatter = this.generateSteeringFrontmatter(injection);
-    const content = `${frontmatter}\n\n${injection.content}`;
+    for (const sec of sections) {
+      if (injection.content.includes(sec.key)) {
+        // We are injecting this specific section. Let's see if it already exists in the prompt.
+        const idx = prompt.indexOf(sec.key);
+        if (idx !== -1) {
+          // It exists! Find the beginning of "# GLOBAL CONTEXT" just before it (if any)
+          let startIdx = prompt.lastIndexOf('# GLOBAL CONTEXT', idx);
+          if (startIdx === -1) {
+            startIdx = idx;
+          }
+          
+          // Find the end of this section. It ends where the next "# GLOBAL CONTEXT" starts,
+          // or at the end of the prompt.
+          let endIdx = prompt.indexOf('# GLOBAL CONTEXT', idx + sec.key.length);
+          if (endIdx === -1) {
+            endIdx = prompt.length;
+          }
 
-    await fs.writeFile(filePath, content);
-    console.log(`✅ Injected ${injection.type} context: ${filename}`);
-  }
-
-  private generateSteeringFrontmatter(injection: ContextInjection): string {
-    const mode = injection.mode || 'always';
-    
-    let frontmatter = `---\ninclusion: ${mode}`;
-
-    if (mode === 'fileMatch' && injection.fileMatchPattern) {
-      frontmatter += `\nfileMatchPattern: "${injection.fileMatchPattern}"`;
+          // Replace the old section with the new content
+          const before = prompt.substring(0, startIdx).trim();
+          const after = prompt.substring(endIdx).trim();
+          prompt = `${before}\n\n# GLOBAL CONTEXT\n\n${injection.content}\n\n${after}`.trim();
+          foundSection = true;
+          break;
+        }
+      }
     }
 
-    if (mode === 'auto') {
-      frontmatter += `\nname: pai-context`;
-      frontmatter += `\ndescription: PAI system context and configuration`;
+    if (!foundSection) {
+      // Just append normally if it's a new context or we couldn't match a section
+      prompt = `${prompt.trim()}\n\n# ${injection.type.toUpperCase()} CONTEXT\n\n${injection.content}`.trim();
     }
 
-    frontmatter += `\n---`;
-
-    return frontmatter;
+    agentConfig.prompt = prompt;
+    await this.saveAgentConfig(agentConfig);
+    console.log(`✅ Injected ${injection.type} context into PAI agent prompt`);
   }
 
   async executeTool(tool: string, params: any): Promise<any> {
-    // Kiro tool execution would go through Kiro's API
-    // For now, this is a placeholder
+    // Kiro CLI tool execution would go through the CLI
     console.log(`Executing tool: ${tool}`, params);
     return { success: true };
   }
 
   /**
-   * Create a Kiro spec from PAI ISA
+   * Kiro CLI doesn't have specs - this is a no-op
    */
   async createSpec(spec: SpecData): Promise<string> {
-    const specId = `spec-${Date.now()}`;
-    const specDir = path.join(process.cwd(), '.kiro', 'specs', specId);
-    
-    await fs.mkdir(specDir, { recursive: true });
-
-    // Create requirements.md or bugfix.md
-    const requirementsFile = spec.type === 'feature' ? 'requirements.md' : 'bugfix.md';
-    const requirementsPath = path.join(specDir, requirementsFile);
-    await fs.writeFile(requirementsPath, spec.requirements || '# Requirements\n\nTBD');
-
-    // Create design.md
-    const designPath = path.join(specDir, 'design.md');
-    await fs.writeFile(designPath, spec.design || '# Design\n\nTBD');
-
-    // Create tasks.md
-    const tasksPath = path.join(specDir, 'tasks.md');
-    const tasksContent = this.generateTasksMarkdown(spec.tasks || []);
-    await fs.writeFile(tasksPath, tasksContent);
-
-    console.log(`✅ Created spec: ${specId}`);
-    return specId;
-  }
-
-  private generateTasksMarkdown(tasks: any[]): string {
-    let content = '# Tasks\n\n';
-    
-    for (const task of tasks) {
-      const status = task.status === 'completed' ? '[x]' : '[ ]';
-      content += `- ${status} ${task.description}\n`;
-    }
-
-    return content;
+    console.warn('⚠️  Kiro CLI does not support specs. Use custom agents instead.');
+    return 'not-supported';
   }
 
   async updateSpec(specId: string, updates: Partial<SpecData>): Promise<void> {
-    const specDir = path.join(process.cwd(), '.kiro', 'specs', specId);
-    
-    if (updates.requirements) {
-      const requirementsPath = path.join(specDir, 'requirements.md');
-      await fs.writeFile(requirementsPath, updates.requirements);
-    }
-
-    if (updates.design) {
-      const designPath = path.join(specDir, 'design.md');
-      await fs.writeFile(designPath, updates.design);
-    }
-
-    if (updates.tasks) {
-      const tasksPath = path.join(specDir, 'tasks.md');
-      const tasksContent = this.generateTasksMarkdown(updates.tasks);
-      await fs.writeFile(tasksPath, tasksContent);
-    }
-
-    console.log(`✅ Updated spec: ${specId}`);
+    console.warn('⚠️  Kiro CLI does not support specs.');
   }
 
   async getSpec(specId: string): Promise<SpecData | null> {
-    const specDir = path.join(process.cwd(), '.kiro', 'specs', specId);
-    
-    try {
-      const requirementsPath = path.join(specDir, 'requirements.md');
-      const designPath = path.join(specDir, 'design.md');
-      const tasksPath = path.join(specDir, 'tasks.md');
-
-      const requirements = await fs.readFile(requirementsPath, 'utf-8');
-      const design = await fs.readFile(designPath, 'utf-8');
-      const tasksContent = await fs.readFile(tasksPath, 'utf-8');
-
-      return {
-        type: 'feature',
-        title: specId,
-        requirements,
-        design,
-        tasks: this.parseTasksMarkdown(tasksContent),
-      };
-    } catch (error) {
-      return null;
-    }
-  }
-
-  private parseTasksMarkdown(content: string): any[] {
-    const tasks: any[] = [];
-    const lines = content.split('\n');
-
-    for (const line of lines) {
-      const match = line.match(/^- \[([ x])\] (.+)$/);
-      if (match) {
-        tasks.push({
-          id: `task-${tasks.length + 1}`,
-          description: match[2],
-          status: match[1] === 'x' ? 'completed' : 'pending',
-        });
-      }
-    }
-
-    return tasks;
+    console.warn('⚠️  Kiro CLI does not support specs.');
+    return null;
   }
 
   async deleteSpec(specId: string): Promise<void> {
-    const specDir = path.join(process.cwd(), '.kiro', 'specs', specId);
-    await fs.rm(specDir, { recursive: true, force: true });
-    console.log(`✅ Deleted spec: ${specId}`);
+    console.warn('⚠️  Kiro CLI does not support specs.');
   }
 
   async isAvailable(): Promise<boolean> {
-    // Check if Kiro config directory exists
+    // Check if Kiro CLI is installed
     try {
-      const kiroDir = path.join(os.homedir(), '.kiro');
-      await fs.access(kiroDir);
-      return true;
+      const proc = Bun.spawn(['which', 'kiro-cli']);
+      const status = await proc.exited;
+      return status === 0;
     } catch {
       return false;
     }
@@ -377,25 +467,104 @@ export class KiroAdapter extends BasePlatformAdapter {
   getCapabilities(): PlatformCapabilities {
     return {
       supportsHooks: true,
-      supportsSpecs: true,
+      supportsSpecs: false, // Kiro CLI doesn't have specs
       supportsSteering: true,
       supportsSkills: true,
       supportsMCP: true,
-      supportsVoice: false, // Kiro doesn't have native voice
-      supportsDashboard: false, // Would need standalone Pulse
+      supportsVoice: false,
+      supportsDashboard: false,
       hookTypes: [
+        'SessionStart', // agentSpawn
         'UserPromptSubmit',
         'PreToolUse',
         'PostToolUse',
         'Stop',
-        'FileCreate',
-        'FileSave',
-        'FileDelete',
-        'PreTaskExecution',
-        'PostTaskExecution',
-        'ManualTrigger',
       ],
-      contextModes: ['always', 'auto', 'manual', 'fileMatch'],
+      contextModes: ['always'], // CLI steering is always loaded
     };
+  }
+
+  /**
+   * Load PAI agent configuration
+   */
+  private async loadAgentConfig(): Promise<KiroAgentConfig> {
+    try {
+      const content = await fs.readFile(this.agentConfigPath, 'utf-8');
+      return JSON.parse(content);
+    } catch {
+      // Create default agent config
+      return {
+        name: 'pai',
+        description: 'Personal AI Infrastructure agent for Kiro CLI',
+        prompt: 'You are a helpful AI assistant powered by PAI (Personal AI Infrastructure).',
+        tools: ['*'],
+        allowedTools: ['read', 'write', 'shell', '@*'],
+        hooks: {},
+        includeMcpJson: true,
+      };
+    }
+  }
+
+  /**
+   * Save PAI agent configuration
+   */
+  private async saveAgentConfig(config: KiroAgentConfig): Promise<void> {
+    const dir = path.dirname(this.agentConfigPath);
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(
+      this.agentConfigPath, 
+      JSON.stringify(config, null, 2)
+    );
+  }
+
+  /**
+   * Create a custom agent configuration
+   * Merges with existing config if file already exists (preserves hooks)
+   */
+  async createCustomAgent(config: Partial<KiroAgentConfig>): Promise<string> {
+    const agentName = config.name || 'pai-custom';
+    const agentPath = path.join(
+      os.homedir(),
+      '.kiro',
+      'agents',
+      `${agentName}.json`
+    );
+
+    let existing: Partial<KiroAgentConfig> = {};
+    try {
+      const content = await fs.readFile(agentPath, 'utf-8');
+      existing = JSON.parse(content);
+    } catch {}
+
+    // Merge prompt: overwrite/reset for 'pai' agent, merge cleanly for others
+    let mergedPrompt = existing.prompt;
+    if (config.prompt) {
+      if (agentName === 'pai') {
+        mergedPrompt = config.prompt;
+      } else {
+        mergedPrompt = existing.prompt
+          ? existing.prompt.includes(config.prompt)
+            ? existing.prompt
+            : `${existing.prompt}\n\n${config.prompt}`
+          : config.prompt;
+      }
+    }
+
+    const fullConfig: KiroAgentConfig = {
+      name: agentName,
+      description: config.description || existing.description || 'Custom PAI agent',
+      prompt: mergedPrompt,
+      tools: config.tools || existing.tools || ['*'],
+      allowedTools: config.allowedTools || existing.allowedTools,
+      hooks: existing.hooks || config.hooks || {},
+      model: config.model || existing.model,
+      includeMcpJson: config.includeMcpJson ?? existing.includeMcpJson ?? true,
+      resources: config.resources || existing.resources,
+    };
+
+    await fs.writeFile(agentPath, JSON.stringify(fullConfig, null, 2));
+    console.log(`✅ Created custom agent: ${agentName} (merged with existing)`);
+    
+    return agentName;
   }
 }
