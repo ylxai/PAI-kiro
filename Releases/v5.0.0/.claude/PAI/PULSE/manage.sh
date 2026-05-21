@@ -9,6 +9,14 @@ PLIST_DST="$HOME/Library/LaunchAgents/$PLIST_NAME.plist"
 PID_FILE="$PULSE_DIR/state/pulse.pid"
 STATE_FILE="$PULSE_DIR/state/state.json"
 
+# Detect OS
+UNAME=$(uname)
+if [ "$UNAME" != "Darwin" ]; then
+  IS_LINUX=1
+else
+  IS_LINUX=0
+fi
+
 # Resolve bun's actual location for the launchd job. The public plist
 # template ships with `__BUN_PATH__` so the job works for both brew users
 # (/opt/homebrew/bin/bun) and curl-installer users (~/.bun/bin/bun).
@@ -30,23 +38,53 @@ fi
 
 case "$1" in
   start)
-    if [ ! -f "$PLIST_DST" ]; then
-      # Substitute __HOME__ + __BUN_PATH__ placeholders (public template);
-      # no-op on plists that already have literal paths.
-      sed -e "s|__HOME__|$HOME|g" -e "s|__BUN_PATH__|$BUN_PATH|g" "$PLIST_SRC" > "$PLIST_DST"
+    if [ "$IS_LINUX" -eq 1 ]; then
+      mkdir -p "$PULSE_DIR/state" "$PULSE_DIR/logs"
+      if [ -f "$PID_FILE" ]; then
+        PID=$(cat "$PID_FILE")
+        if ps -p "$PID" > /dev/null 2>&1; then
+          echo "PAI Pulse is already running (PID $PID)"
+          exit 0
+        fi
+      fi
+      cd "$PULSE_DIR"
+      setsid "$BUN_PATH" run pulse.ts < /dev/null > "$PULSE_DIR/logs/pulse-stdout.log" 2> "$PULSE_DIR/logs/pulse-stderr.log" &
+      PID=$!
+      echo "$PID" > "$PID_FILE"
+      echo "PAI Pulse started in background (PID $PID)"
+    else
+      if [ ! -f "$PLIST_DST" ]; then
+        sed -e "s|__HOME__|$HOME|g" -e "s|__BUN_PATH__|$BUN_PATH|g" "$PLIST_SRC" > "$PLIST_DST"
+      fi
+      launchctl load "$PLIST_DST" 2>/dev/null
+      echo "PAI Pulse started"
     fi
-    launchctl load "$PLIST_DST" 2>/dev/null
-    echo "PAI Pulse started"
     ;;
 
   stop)
-    launchctl unload "$PLIST_DST" 2>/dev/null
-    if [ -f "$PID_FILE" ]; then
-      PID=$(cat "$PID_FILE")
-      kill "$PID" 2>/dev/null
-      echo "PAI Pulse stopped (PID $PID)"
+    if [ "$IS_LINUX" -eq 1 ]; then
+      if [ -f "$PID_FILE" ]; then
+        PID=$(cat "$PID_FILE")
+        kill "$PID" 2>/dev/null
+        sleep 1
+        if ps -p "$PID" > /dev/null 2>&1; then
+          kill -9 "$PID" 2>/dev/null
+        fi
+        rm -f "$PID_FILE"
+        echo "PAI Pulse stopped (PID $PID)"
+      else
+        pkill -9 -f "bun.*pulse.ts" 2>/dev/null
+        echo "PAI Pulse stopped"
+      fi
     else
-      echo "PAI Pulse stopped"
+      launchctl unload "$PLIST_DST" 2>/dev/null
+      if [ -f "$PID_FILE" ]; then
+        PID=$(cat "$PID_FILE")
+        kill "$PID" 2>/dev/null
+        echo "PAI Pulse stopped (PID $PID)"
+      else
+        echo "PAI Pulse stopped"
+      fi
     fi
     ;;
 
@@ -86,22 +124,30 @@ case "$1" in
   install)
     mkdir -p "$PULSE_DIR/state" "$PULSE_DIR/logs"
 
-    # Cleanup any prior pulse before installing fresh — prevents the stale-PID
-    # / unbound-port half-dead state where a previous launchd-managed pulse is
-    # alive with open fds but never bound :31337.
-    if [ -f "$PLIST_DST" ]; then
-      launchctl unload "$PLIST_DST" 2>/dev/null || true
+    if [ "$IS_LINUX" -eq 1 ]; then
+      if [ -f "$PID_FILE" ]; then
+        PID=$(cat "$PID_FILE")
+        kill "$PID" 2>/dev/null
+        sleep 1
+      fi
+      pkill -9 -f "bun.*pulse.ts" 2>/dev/null || true
+      sleep 1
+
+      setsid "$BUN_PATH" run pulse.ts < /dev/null > "$PULSE_DIR/logs/pulse-stdout.log" 2> "$PULSE_DIR/logs/pulse-stderr.log" &
+      PID=$!
+      echo "$PID" > "$PID_FILE"
+    else
+      if [ -f "$PLIST_DST" ]; then
+        launchctl unload "$PLIST_DST" 2>/dev/null || true
+      fi
+      pkill -9 -f "bun.*pulse.ts" 2>/dev/null || true
+      sleep 1
+
+      sed -e "s|__HOME__|$HOME|g" -e "s|__BUN_PATH__|$BUN_PATH|g" "$PLIST_SRC" > "$PLIST_DST"
+      launchctl load "$PLIST_DST"
     fi
-    pkill -9 -f "bun.*pulse.ts" 2>/dev/null || true
-    sleep 1
 
-    # Substitute __HOME__ + __BUN_PATH__ placeholders (public template);
-    # no-op on plists that already have literal paths.
-    sed -e "s|__HOME__|$HOME|g" -e "s|__BUN_PATH__|$BUN_PATH|g" "$PLIST_SRC" > "$PLIST_DST"
-    launchctl load "$PLIST_DST"
-
-    # Verify pulse actually binds :31337 within 10s. Fail loud if not — prior
-    # behavior was silent success even when the daemon never came up.
+    # Verify pulse actually binds :31337 within 10s.
     for _ in $(seq 1 20); do
       sleep 0.5
       if curl -sS --max-time 1 -o /dev/null -X POST http://localhost:31337/notify \
@@ -112,15 +158,25 @@ case "$1" in
       fi
     done
 
-    echo "ERROR: PAI Pulse plist installed but port 31337 did not bind within 10s." >&2
+    echo "ERROR: PAI Pulse daemon installed but port 31337 did not bind within 10s." >&2
     echo "  Check: tail -50 $PULSE_DIR/logs/pulse-stderr.log" >&2
     exit 1
     ;;
 
   uninstall)
-    launchctl unload "$PLIST_DST" 2>/dev/null
-    rm -f "$PLIST_DST"
-    echo "PAI Pulse uninstalled"
+    if [ "$IS_LINUX" -eq 1 ]; then
+      if [ -f "$PID_FILE" ]; then
+        PID=$(cat "$PID_FILE")
+        kill "$PID" 2>/dev/null
+        rm -f "$PID_FILE"
+      fi
+      pkill -9 -f "bun.*pulse.ts" 2>/dev/null || true
+      echo "PAI Pulse uninstalled"
+    else
+      launchctl unload "$PLIST_DST" 2>/dev/null
+      rm -f "$PLIST_DST"
+      echo "PAI Pulse uninstalled"
+    fi
     ;;
 
   *)

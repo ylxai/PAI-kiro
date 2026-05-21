@@ -73,3 +73,8 @@ credentials/
 .claude/pai_updates/
 .claude/pai_backups/
 .claude/.pai-sync-history
+
+# Kiro CLI local config
+.kiro/
+.kiro
+

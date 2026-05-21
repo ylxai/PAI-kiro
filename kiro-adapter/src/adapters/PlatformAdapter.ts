@@ -6,7 +6,7 @@
  */
 
 export interface PlatformConfig {
-  name: 'claude-code' | 'kiro' | 'opencode';
+  name: 'claude-code' | 'kiro' | 'kiro-cli' | 'opencode';
   version: string;
   configDir: string;
   steeringDir?: string;
