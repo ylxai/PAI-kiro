@@ -3,9 +3,9 @@
  */
 
 export { PlatformAdapter, BasePlatformAdapter } from './adapters/PlatformAdapter';
-export { KiroAdapter } from './adapters/KiroAdapter';
+export { KiroAdapter } from './adapters/KiroAdapter'; // For Kiro IDE (legacy)
+export { KiroCLIAdapter } from './adapters/KiroCLIAdapter'; // For Kiro CLI
 export { PAICore } from './core/PAICore';
-export { SpecConverter } from './kiro/SpecConverter';
 
 export type {
   PlatformConfig,
@@ -19,10 +19,6 @@ export type {
 } from './adapters/PlatformAdapter';
 
 export type {
-  ISA,
-  ISC,
-  Decision,
-  ChangelogEntry,
-  VerificationResult,
-  KiroSpec,
-} from './kiro/SpecConverter';
+  KiroCLIAgentConfig,
+  KiroCLIHook,
+} from './adapters/KiroCLIAdapter';
