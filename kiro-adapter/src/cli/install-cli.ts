@@ -70,7 +70,7 @@ async function main() {
 
   // Step 6: Initialize PAI Core (injects Algorithm context, registers hooks)
   console.log(chalk.yellow('\n🚀 Initializing PAI Core...\n'));
-  const pai = new PAICore({ adapter });
+  const pai = new PAICore({ adapter, registerHooks: true });
   await pai.initialize();
 
   // Step 7: Migrate from existing PAI (if requested)

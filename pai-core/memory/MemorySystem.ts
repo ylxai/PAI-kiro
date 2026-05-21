@@ -7,6 +7,9 @@
 
 import * as fs from 'fs/promises';
 import * as path from 'path';
+import { SemanticMemory, SemanticSearchResult } from './SemanticMemory';
+
+export { SemanticSearchResult };
 
 export type MemoryType =
   | 'WORK'           // Active work and ISAs
@@ -37,9 +40,11 @@ export interface MemoryMetadata {
 
 export class MemorySystem {
   private rootPath: string;
+  private semanticMemory: SemanticMemory;
 
   constructor(rootPath: string) {
     this.rootPath = rootPath;
+    this.semanticMemory = new SemanticMemory(rootPath);
   }
 
   /**
@@ -197,5 +202,23 @@ export class MemorySystem {
     }
     
     return files;
+  }
+
+  /**
+   * Search memories semantically using Vector Search/TF-IDF
+   */
+  async searchSemantic(query: string, limit: number = 5, types?: MemoryType[]): Promise<SemanticSearchResult[]> {
+    const typesToSearch = types || [
+      'WORK', 'KNOWLEDGE', 'LEARNING', 'RELATIONSHIP', 'RESEARCH', 'WISDOM', 'REFERENCE'
+    ];
+
+    const allMemories: Memory[] = [];
+
+    for (const type of typesToSearch) {
+      const memories = await this.query(type);
+      allMemories.push(...memories);
+    }
+
+    return this.semanticMemory.search(query, allMemories, limit);
   }
 }
